@@ -80,8 +80,6 @@ const (
 	FinalizerName = "druid.gardener.cloud/etcd-druid"
 	// DefaultImageVector is a constant for the path to the default image vector file.
 	DefaultImageVector = "images.yaml"
-	// DefaultInterval is the default interval for retry operations.
-	DefaultInterval = 5 * time.Second
 	// EtcdReady implies that etcd is ready
 	EtcdReady = true
 	// DefaultAutoCompactionRetention defines the default auto-compaction-retention length for etcd.
@@ -89,6 +87,8 @@ const (
 )
 
 var (
+	// DefaultInterval is the default interval for retry operations.
+	DefaultInterval = 5 * time.Second
 	// DefaultTimeout is the default timeout for retry operations.
 	DefaultTimeout = 1 * time.Minute
 )
@@ -114,12 +114,14 @@ func NewReconcilerWithImageVector(mgr manager.Manager) (*EtcdReconciler, error) 
 
 // NewEtcdReconciler creates a new EtcdReconciler object
 func NewEtcdReconciler(mgr manager.Manager) (*EtcdReconciler, error) {
-	return (&EtcdReconciler{
-		Client: mgr.GetClient(),
-		Config: mgr.GetConfig(),
-		Scheme: mgr.GetScheme(),
-		logger: log.Log.WithName("etcd-controller"),
-	}).InitializeControllerWithChartApplier()
+	return NewEtcdReconcilerWithAllFields(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+		nil,
+		mgr.GetConfig(),
+		nil,
+		log.Log.WithName("etcd-controller"),
+	).InitializeControllerWithChartApplier()
 }
 
 // NewEtcdReconcilerWithImageVector creates a new EtcdReconciler object
@@ -129,6 +131,26 @@ func NewEtcdReconcilerWithImageVector(mgr manager.Manager) (*EtcdReconciler, err
 		return nil, err
 	}
 	return ec.InitializeControllerWithImageVector()
+}
+
+// NewEtcdReconcilerWithAllFields creates a new EtcdReconciler object.
+// It must be directly used only for testing purposes.
+func NewEtcdReconcilerWithAllFields(
+	c client.Client,
+	sch *runtime.Scheme,
+	chartApplier kubernetes.ChartApplier,
+	config *rest.Config,
+	iv imagevector.ImageVector,
+	logger logr.Logger,
+) *EtcdReconciler {
+	return &EtcdReconciler{
+		Client:       c,
+		Scheme:       sch,
+		chartApplier: chartApplier,
+		Config:       config,
+		ImageVector:  iv,
+		logger:       logger,
+	}
 }
 
 func getChartPath() string {
@@ -1156,8 +1178,8 @@ func (r *EtcdReconciler) getMapFromEtcd(etcd *druidv1alpha1.Etcd) (map[string]in
 		"sharedConfig":            sharedConfigValues,
 		"replicas":                etcd.Spec.Replicas,
 		"statefulsetReplicas":     statefulsetReplicas,
-		"serviceName":             fmt.Sprintf("%s-client", etcd.Name),
-		"configMapName":           fmt.Sprintf("etcd-bootstrap-%s", string(etcd.UID[:6])),
+		"serviceName":             getServiceNameFor(etcd),
+		"configMapName":           getConfigMapNameFor(etcd),
 		"cronJobName":             getCronJobName(etcd),
 		"volumeClaimTemplateName": volumeClaimTemplateName,
 	}
@@ -1200,6 +1222,14 @@ func (r *EtcdReconciler) getMapFromEtcd(etcd *druidv1alpha1.Etcd) (map[string]in
 	}
 
 	return values, nil
+}
+
+func getServiceNameFor(etcd *druidv1alpha1.Etcd) string {
+	return fmt.Sprintf("%s-client", etcd.Name)
+}
+
+func getConfigMapNameFor(etcd *druidv1alpha1.Etcd) string {
+	return fmt.Sprintf("etcd-bootstrap-%s", string(etcd.UID[:6]))
 }
 
 func (r *EtcdReconciler) addFinalizersToDependantSecrets(ctx context.Context, logger logr.Logger, etcd *druidv1alpha1.Etcd) error {
